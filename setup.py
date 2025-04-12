@@ -1,66 +1,81 @@
-# Copyright 2021 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+#!/bin/bash
+set -e
 
-"""
-Standard Python script to install the aiymakerkit library as a package.
+echo
+echo "📷 Checking for camera configuration..."
+if command -v raspi-config &>/dev/null; then
+    CAM=$(sudo raspi-config nonint get_camera)
+    if [ "$CAM" -eq 1 ]; then
+        sudo raspi-config nonint do_camera 0
+        echo "Camera is now enabled. Reboot is required to take effect."
+        read -p "Reboot now? (y/n): " answer
+        if [[ $answer =~ ^[Yy]$ ]]; then
+            sudo reboot
+        else
+            echo "Reboot later to finish camera enablement."
+            exit 0
+        fi
+    else
+        echo "Camera is already enabled."
+    fi
+else
+    echo "Skipping camera check — not running Raspberry Pi OS."
+fi
 
-Most users should not run this script directly. Instead use the run_demo.sh
-script, which will ensure that all required packages are installed and then
-run a demo to verify everything works:
+echo
+echo "🐍 Forcing Python 3.9 as system default..."
+if ! command -v python3.9 &>/dev/null; then
+    echo "❌ Python 3.9 is not installed. Please compile and install it first."
+    exit 1
+fi
+sudo ln -sf /usr/local/bin/python3.9 /usr/bin/python3
+sudo ln -sf /usr/local/bin/pip3.9 /usr/bin/pip3
+echo "✅ Python version: $(python3 --version)"
 
-    bash run_demo.sh
+echo
+echo "📦 Adding Coral EdgeTPU repo..."
+echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
+curl -sSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+sudo apt-get update --allow-releaseinfo-change
 
-However, if you want to make changes to the aiymakerkit APIs, you can install
-this package manually to be editable:
+echo
+echo "📥 Downloading Coral .deb packages to force install..."
+mkdir -p ~/coral-pkgs && cd ~/coral-pkgs
 
-    python3 -m pip install -e .
+for pkg in \
+  libedgetpu1-max \
+  python3-pycoral \
+  python3-tflite-runtime \
+  python3-pyaudio \
+  python3-opencv \
+  libatlas-base-dev \
+  zip unzip; do
+    echo "📦 Downloading $pkg..."
+    apt-get download "$pkg"
+done
 
-Then you can make changes to the aiymakerkit Python files and those changes
-are instantly available to other programs that import aiymakerkit.
+echo
+echo "🚀 Forcing installation of Coral packages (ignoring version conflicts)..."
+sudo dpkg -i --force-all ./*.deb || true
+sudo apt-get install -f -y
+cd ~
+rm -rf ~/coral-pkgs
 
-NOTE: If you do install manually, pycoral must first be installed as follows:
-    python3 -m pip install --extra-index-url https://google-coral.github.io/py-repo/ pycoral~=2.0
-"""
+echo
+echo "📚 Installing Python pip packages..."
+python3 -m pip install --upgrade pip
+python3 -m pip install pynput tflite-support
 
-import os
-import re
-from setuptools import setup
+echo
+echo "🧠 Cloning and installing AIY Maker Kit..."
+git clone https://github.com/google-coral/aiy-maker-kit
+python3 -m pip install ./aiy-maker-kit
 
+echo
+echo "⬇️ Downloading example models..."
+bash aiy-maker-kit/examples/download_models.sh || true
+bash aiy-maker-kit/projects/download_models.sh || true
 
-def read(filename):
-    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), filename)
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read()
-
-
-def find_version(text):
-    match = re.search(r"^__version__\s*=\s*['\"](.*)['\"]\s*$", text,
-                      re.MULTILINE)
-    return match.group(1)
-
-
-setup(
-    name='aiymakerkit',
-    description='Simple API for ML inferencing with TF Lite and Coral Edge TPU',
-    long_description=read('README.md'),
-    long_description_content_type='text/markdown',
-    license='Apache 2',
-    version=find_version(read('aiymakerkit/__init__.py')),
-    author='Coral',
-    author_email='coral-support@google.com',
-    url='https://github.com/google-coral/aiy-maker-kit',
-    packages=['aiymakerkit'],
-    install_requires=['pycoral>=2.0.0', 'tflite-support>=0.3.1',
-            'tflite-runtime', 'pyaudio', 'opencv-python', 'numpy'],
-)
+echo
+echo "✅ Coral software setup is complete."
+echo "Visit: https://coral.ai/docs for more examples."
